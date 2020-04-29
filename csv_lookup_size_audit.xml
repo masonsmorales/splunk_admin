@@ -1,0 +1,125 @@
+<form>
+  <label>Lookup Audit</label>
+  <description>Dashboard for displaying lookup table files on a Search Head. Created to easily identify large tables which might disrupt Splunk uptime. Currently only works with deployments on Linux where Splunk is installed to /opt/splunk.</description>
+  <fieldset submitButton="false" autoRun="true">
+    <input type="dropdown" token="filter" searchWhenChanged="true">
+      <label>Select Lookup Filter</label>
+      <choice value="*">Show All Lookups</choice>
+      <choice value="NonBlackList">Exclude Blacklisted Lookups</choice>
+      <choice value="Blacklist">Show Only Blacklisted Lookups</choice>
+      <change>
+        <condition value="Blacklist">
+          <set token="blacklist">
+            <![CDATA[(
+    [| rest /servicesNS/-/-/configs/conf-distsearch splunk_server=local
+    | where title="replicationBlacklist"
+    | transpose 0 header_field=title
+    | where like(replicationBlacklist,"apps%") OR like(replicationBlacklist,"%csv")
+    | eval replicationBlacklist=replace(replicationBlacklist,"\.\.\.","*")
+    | eval replicationBlacklist=replace(replicationBlacklist,"\[|\]|\\\\","")
+    | rename replicationBlacklist AS title
+    | fields title])]]>
+          </set>
+        </condition>
+        <condition value="NonBlackList">
+          <set token="blacklist">
+            <![CDATA[NOT (
+    [| rest /servicesNS/-/-/configs/conf-distsearch splunk_server=local
+    | where title="replicationBlacklist"
+    | transpose 0 header_field=title
+    | where like(replicationBlacklist,"apps%") OR like(replicationBlacklist,"%csv")
+    | eval replicationBlacklist=replace(replicationBlacklist,"\.\.\.","*")
+    | eval replicationBlacklist=replace(replicationBlacklist,"\[|\]|\\\\","")
+    | rename replicationBlacklist AS title
+    | fields title]) ]]>
+          </set>
+        </condition>
+        <condition value="*">
+          <set token="blacklist">*</set>
+        </condition>
+      </change>
+      <default>NonBlackList</default>
+      <initialValue>NonBlackList</initialValue>
+    </input>
+    <input type="dropdown" token="appselection" searchWhenChanged="true">
+      <label>Select App</label>
+      <choice value="*">All</choice>
+      <default>*</default>
+      <fieldForLabel>appname</fieldForLabel>
+      <fieldForValue>appname</fieldForValue>
+      <search>
+        <query>| rest /services/data/lookup-table-files splunk_server=local
+| where like(title,"%csv")
+| rename eai:acl.app as appname
+| dedup appname
+| eval appname=lower(appname)
+| sort appname</query>
+        <earliest>-15m</earliest>
+        <latest>now</latest>
+      </search>
+    </input>
+    <input type="dropdown" token="priv_lookup" searchWhenChanged="true">
+      <label>Private User Lookup</label>
+      <choice value="*">All</choice>
+      <choice value="Yes">Yes</choice>
+      <choice value="No">No</choice>
+      <default>*</default>
+      <initialValue>*</initialValue>
+    </input>
+  </fieldset>
+  <row>
+    <panel>
+      <title>Lookup Files by App</title>
+      <table>
+        <search>
+          <query>| rest /servicesNS/-/-/data/lookup-table-files splunk_server=local
+| search eai:data!="/opt/splunk/etc/users/*"
+| rename eai:acl.app as appname
+| search title="*.csv" appname=$appselection$
+| dedup appname
+| map maxsearches=500 search=" | rest /servicesNS/-/-/admin/file-explorer/opt%252Fsplunk%252Fetc%252Fapps%252F$$appname$$%252Flookups splunk_server=local"
+| search id="*.csv"
+| rex field=title "opt\/splunk\/etc\/apps\/(?&lt;App&gt;.+)\/lookups\/"
+| sort - lastModifiedTime
+| eval "Last Modified" = strftime(lastModifiedTime,"%b %d, %Y %H:%M"), fileSize_MB=round((fileSize/1024),3)
+| fillnull value=0.000 fileSize_MB
+| fields App name fileSize_MB "Last Modified" title
+| rex field=title "(?&lt;title&gt;apps.*)$"
+| search $blacklist$
+| join type=left name [ | rest /servicesNS/-/-/data/lookup-table-files splunk_server=local | search title="*.csv" eai:data!="/opt/splunk/etc/users/*" | rename title AS name | fields + name author]
+| eval private_lookup="No"
+| append [ | rest /servicesNS/-/-/data/lookup-table-files splunk_server=local
+| search eai:data="/opt/splunk/etc/users/*"
+| rename eai:acl.app as appname, eai:userName AS user
+| search appname=*
+| dedup appname
+| map maxsearches=500 search=" | rest /servicesNS/-/-/admin/file-explorer/opt%252Fsplunk%252Fetc%252Fusers%252F$$user$$%252F$$appname$$%252Flookups splunk_server=local"
+| search id="*.csv"
+| rex field=title "opt\/splunk\/etc\/users\/\S+\/(?&lt;App&gt;.+)\/lookups\/"
+| sort - lastModifiedTime
+| eval "Last Modified" = strftime(lastModifiedTime,"%b %d, %Y %H:%M"), fileSize_MB=round((fileSize/1024),3)
+| fillnull value=0.000 fileSize_MB
+| fields App name fileSize_MB "Last Modified" title
+| rex field=title "(?&lt;title&gt;users.*)$"
+| search $blacklist$
+| join type=left name [ | rest /servicesNS/-/-/data/lookup-table-files splunk_server=local | search title="*.csv" eai:data="/opt/splunk/etc/users/*" | rename title AS name | fields + name author]
+| eval private_lookup="Yes"
+]
+| rename title AS path
+| search private_lookup="$priv_lookup$"
+| sort - fileSize_MB</query>
+          <earliest>-15m</earliest>
+          <latest>now</latest>
+          <sampleRatio>1</sampleRatio>
+        </search>
+        <option name="count">100</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">cell</option>
+        <option name="percentagesRow">false</option>
+        <option name="rowNumbers">true</option>
+        <option name="totalsRow">false</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+</form>
