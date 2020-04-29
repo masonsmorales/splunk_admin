@@ -1,5 +1,8 @@
 # alternative CLI client for Splunk by duane waddle
 # kinda crazy, but crazy useful
+# related tools:
+#   - https://github.com/harsmarvania57/splunk-ko-change 
+#   - https://github.com/gjanders/Splunk
 from __future__ import print_function
 import sys
 import os
